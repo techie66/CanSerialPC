@@ -24,19 +24,19 @@
 typedef struct can_frame tCanFrame;
 
 typedef struct {
-	uint16_t port;
-	canid_t canid;
-	int pingcount;
-	int active; // Is port open
-	int watch; // inotify watch
+    uint16_t port;
+    canid_t canid;
+    int pingcount;
+    int active; // Is port open
+    int watch; // inotify watch
 } tPortId;
 
-// p[0] unused and VportFd[0] means CAN socket
+// p[0] unused and VportFd[0] is the CAN socket
 typedef struct {
-	tPortId *p;
-	struct pollfd *VportFd;
-	int portsize;
-	int portptr;
+    tPortId *p;
+    struct pollfd *VportFd;
+    int portsize; // size of allocated VpostFd vector
+    int portptr;
 } tPorts;
 
 
