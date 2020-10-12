@@ -40,30 +40,40 @@ static int pingptr = 0;
 static int Inotify;
 
 
+static void CanTtyName(tPortId *p, char *name, int maxlen) {
+    // TODO: Name according to CAN bus
+    snprintf(name, maxlen, "/tmp/ttyCAN0_%02x%02x%02x%02x%02x%02x",
+             p->can_uuid[0],
+             p->can_uuid[1],
+             p->can_uuid[2],
+             p->can_uuid[3],
+             p->can_uuid[4],
+             p->can_uuid[5]);
+}
+
 static void CanVportClose(tPortId *p) {
     int res;
 
-    char fname[32];
-    sprintf(fname,"/tmp/ttyCAN%d", p->port);
+    char fname[64];
+    CanTtyName(p, fname, sizeof(fname));
     inotify_rm_watch(Inotify, p->watch);
     res = unlink(fname);
-    if (res == 0) {
+    if (res != 0) {
         perror(fname);
     }
 }
 
-static int CanVport(int portid)
+static int CanVport(int portid, uint8_t *uuid)
 {
     int res, i;
     int fd, sfd;
     struct termios ti;
-    char fname[16];
 
     // check if port exists
     for(i=1; i<ports.portptr; i++) {
         if (ports.p[i].port == portid) {
             // Assign the same virtual port for re-initialized CAN
-            printf("Device reset  /tmp/ttyCAN%d\n", portid);
+            printf("Device reset\n");
             return i;
         }
     }
@@ -72,18 +82,21 @@ static int CanVport(int portid)
         // Increase allocated space
         ports.portsize *= 2;
         ports.p = realloc(ports.p, sizeof(tPortId) * ports.portsize);
-        ports.VportFd = malloc(sizeof(struct pollfd) * ports.portsize);
+        ports.VportFd = realloc(ports.VportFd, sizeof(struct pollfd) * ports.portsize);
         if (!ports.p || !ports.VportFd) {
             fprintf(stderr, "CreatePipe: realloc failed!\n");
             exit(1);
         }
     }
 
+    tPortId *p = &ports.p[ports.portptr];
+
     // Assign packet handlers
-    ports.p[ports.portptr].canid = 2*portid+PKT_ID_CTL_FILTER;
-    ports.p[ports.portptr].port = portid;
-    ports.p[ports.portptr].pingcount = PINGS_BEFORE_DISCONNECT;
-    ports.p[ports.portptr].active = 0;
+    p->canid = 2*portid+PKT_ID_CTL_FILTER;
+    memcpy(p->can_uuid, uuid, CAN_UUID_SIZE);
+    p->port = portid;
+    p->pingcount = PINGS_BEFORE_DISCONNECT;
+    p->active = 0;
     ports.VportFd[ports.portptr].revents = 0;
 
     // allocate virtual port
@@ -105,9 +118,10 @@ static int CanVport(int portid)
     char *tname = ttyname(sfd);
 
     // Create symlink to tty
-    sprintf(fname,"/tmp/ttyCAN%d", portid);
+    char fname[64];
+    CanTtyName(p, fname, sizeof(fname));
     unlink(fname);
-    printf("%s CANID %03x\n", fname, ports.p[ports.portptr].canid);
+    printf("%s CANID %03x\n", fname, p->canid);
 
     res = symlink(tname, fname);
     if (res) {
@@ -122,7 +136,7 @@ static int CanVport(int portid)
     ports.VportFd[ports.portptr].fd = fd;
     ports.VportFd[ports.portptr].events = POLLIN;
 
-    ports.p[ports.portptr].watch =
+    p->watch =
         inotify_add_watch(Inotify, fname, IN_OPEN|IN_CLOSE);
 
     ports.portptr++;
@@ -131,20 +145,20 @@ static int CanVport(int portid)
 
 static int ConfigurePort(tCanFrame frame) {
     struct __attribute__((__packed__)) {
-        uint16_t n;
-        uint8_t u[PORT_UUID_SIZE];
+        uint16_t canid;
+        uint8_t u[CAN_UUID_SIZE];
     } resp;
     // Generate packet id:
     // (port number*2) + ID offset
     int portid = PnGetNumber(frame.data);
-    resp.n = 2*portid+PKT_ID_CTL_FILTER;
-    memcpy(resp.u, frame.data, PORT_UUID_SIZE);
+    resp.canid = 2*portid+PKT_ID_CTL_FILTER;
+    memcpy(resp.u, frame.data, CAN_UUID_SIZE);
 
     // allocate virtual port for client
     printf("UUID %02x:%02x:%02x:%02x:%02x:%02x  ",
            resp.u[0], resp.u[1], resp.u[2],
            resp.u[3], resp.u[4], resp.u[5]);
-    CanVport(portid);
+    CanVport(portid, resp.u);
     CanSockSend(PKT_ID_SET, sizeof(resp), (uint8_t *)&resp);
     return 0;
 }
@@ -165,6 +179,7 @@ void *CanRxThread( void *ptr )
 
         if (ret>0) { // one of fd's ready
             if (ports.VportFd[0].revents) {
+                // TODO: Should check what event!
                 if(read(ports.VportFd[0].fd, &frame, sizeof(struct can_frame)) >= 0) {
                     // Configure port
 	  
@@ -231,6 +246,7 @@ void *CanRxThread( void *ptr )
     printf("Close ports\n");
     // close and delete fd's
     for(i=0; i<ports.portptr; i++) {
+        printf("close port %d\n", i);
         CanVportClose(&(ports.p[i]));
     }
     pthread_mutex_unlock(&lock);
@@ -239,8 +255,6 @@ void *CanRxThread( void *ptr )
 void CanPing(void)
 {
 
-    // TODO WARNING thread race condition possible!!!
-    
     pthread_mutex_lock(&lock);
     if(pingptr == 0) {
         // request for new port assign
@@ -298,6 +312,12 @@ int CanSockInit(void)
     addr.can_ifindex = ifr.ifr_ifindex;
 
 
+    /* enable TX blocking mode when linux can TX buffer is full
+       https://rtime.felk.cvut.cz/can/socketcan-qdisc-final.pdf */
+    int sndbuf = 0;
+    if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof (sndbuf)) < 0)
+        perror("setsockopt");
+
     /* Set filters */
     rfilter = malloc(sizeof(struct can_filter) * NUM_CAN_FILTERS);
     if (!rfilter) {
@@ -314,7 +334,7 @@ int CanSockInit(void)
 
     /* set timeout */
     struct timeval tv;
-    tv.tv_sec = 1;
+    tv.tv_sec = 1;  // TODO. hmm
     tv.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 

@@ -18,6 +18,8 @@
 #define NUM_CAN_FILTERS 2
 
 #define CAN_DATA_SIZE (8)
+#define CAN_UUID_SIZE (6)
+
 
 #define PINGS_BEFORE_DISCONNECT 4
 
@@ -26,6 +28,7 @@ typedef struct can_frame tCanFrame;
 typedef struct {
     uint16_t port;
     canid_t canid;
+    uint8_t can_uuid[CAN_UUID_SIZE];
     int pingcount;
     int active; // Is port open
     int watch; // inotify watch
@@ -40,9 +43,9 @@ typedef struct {
 } tPorts;
 
 
-int CanSockInit(void);
+int  CanSockInit(void);
 void CanSockClose(void);
-int CanSockSend(canid_t id, uint8_t len, uint8_t* data);
+int  CanSockSend(canid_t id, uint8_t len, uint8_t* data);
 void CanPing(void);
 
 #endif /* CANSOCK_H_ */
