@@ -26,6 +26,26 @@
 #include "cansock.h"
 #include "portnumber.h"
 
+
+typedef struct {
+    uint16_t port;
+    canid_t canid;
+    uint8_t can_uuid[CAN_UUID_SIZE];
+    int pingcount;
+    int active; // Is port open
+    int watch; // inotify watch
+} tPortId;
+
+// p[0] unused and VportFd[0] is the CAN socket
+typedef struct {
+    tPortId *p;
+    struct pollfd *VportFd;
+    int portsize; // size of allocated VpostFd vector
+    int portptr;
+} tPorts;
+
+
+
 #define EVENT_SIZE  ( sizeof (struct inotify_event) )
 #define EVENT_BUF_LEN     ( 1024 * ( EVENT_SIZE + 16 ) )
 
@@ -128,7 +148,7 @@ static int CanVport(int portid, uint8_t *uuid)
         fprintf(stderr, "Error: symlink %d\n", res);
         return -1;
     }
-    res = chmod(tname, 0660);
+    res = chmod(tname, 0666);
     if (res) {
         fprintf(stderr, "Error: chmod %d\n", res);
         return -1;
@@ -172,6 +192,7 @@ void *CanRxThread( void *ptr )
     char ev_buf[EVENT_BUF_LEN];
 
     pthread_mutex_lock(&lock);
+
     while (threadexit==0) {
         pthread_mutex_unlock(&lock);
         ret = poll(ports.VportFd, ports.portptr, 1000);
@@ -182,7 +203,7 @@ void *CanRxThread( void *ptr )
                 // TODO: Should check what event!
                 if(read(ports.VportFd[0].fd, &frame, sizeof(struct can_frame)) >= 0) {
                     // Configure port
-	  
+
                     if (frame.can_id == PKT_ID_UUID_RESP) {
                         if (ConfigurePort(frame) < 0) {
                             fprintf(stderr, "Aborting...\n");
@@ -200,7 +221,7 @@ void *CanRxThread( void *ptr )
                             }
                         }
                         if ( i == ports.portptr) {
-                            printf("Packet id unknown 0x%x\n", frame.can_id);
+                            printf("An unknown node is using CAN ID 0x%x. Ask for UUID\n", frame.can_id);
                             // Looks like lost hanshake, try to re-init
                             uint16_t txaddr = frame.can_id - 1;
                             CanSockSend(PKT_ID_UUID, 2, (uint8_t*) &(txaddr));
@@ -243,9 +264,8 @@ void *CanRxThread( void *ptr )
         }
     }
 
-    printf("Close ports\n");
     // close and delete fd's
-    for(i=0; i<ports.portptr; i++) {
+    for(i=1; i<ports.portptr; i++) {
         printf("close port %d\n", i);
         CanVportClose(&(ports.p[i]));
     }
