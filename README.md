@@ -1,11 +1,8 @@
 # CanSerial
 
-# !!! This is old obsolete software! Since Mar 13, 2021 Klipper has native CAN bus support !!!
-
 Serial port emulation over CAN bus.
 Working on Raspberry Pi with MCP2515 module or other linux cansock compatible adapters.
-Main goal - emulate serial port to use tiny external modules together with
-Klipper controller for 3D-printers https://github.com/KevinOConnor/klipper
+Main goal - emulate serial port to add serial debugging to external can-connected modules (arduino)
 
 Adding CAN bus to Raspberry Pi completely described here
 https://www.raspberrypi.org/forums/viewtopic.php?f=44&t=141052
